@@ -3,6 +3,13 @@ import {csvWriterInstance, processSKUs} from "./utils.ts";
 
 const errorLog = fs.createWriteStream('errors.log', {flags: 'a'});
 
+/**
+ * Runs the product scraper to fetch and write product data to a CSV file.
+ *
+ * This function reads SKU data from a JSON file, processes each SKU using the `processSKUs` function,
+ * and writes the valid products to a CSV file. It also logs any errors that occur during the process
+ * to an error log file.
+ */
 const runScraper = async () => {
     try {
         const skusData = JSON.parse(fs.readFileSync('skus.json', 'utf8'));
