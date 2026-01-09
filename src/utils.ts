@@ -1,4 +1,4 @@
-import {type Page, type Browser} from 'playwright';
+import {type Page, type Browser, type BrowserContext} from 'playwright';
 import {createObjectCsvWriter} from "csv-writer";
 import {chromium} from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
@@ -34,6 +34,9 @@ export interface SKUInput {
     SKU: string;
 }
 
+/**
+ * Configuration structure for DOM selectors.
+ */
 type SelectorConfig = {
     title: string;
     description: string;
@@ -81,15 +84,19 @@ export class ProductScraper {
     private browser: Browser | null = null;
     private readonly errorStream: fs.WriteStream;
 
+    /**
+     * Initializes the scraper with stealth plugins and error logging stream.
+     */
     constructor() {
         chromium.use(stealth());
         this.errorStream = fs.createWriteStream('errors.log', {flags: 'a'});
     }
 
     /**
-     * Initializes the browser instance.
+     * Initializes the browser instance if it is not already active.
+     * Uses optimization arguments to reduce resource consumption.
      */
-    async init() {
+    async init(): Promise<void> {
         if (this.browser) return;
         this.browser = await chromium.launch({
             headless: false,
@@ -98,6 +105,7 @@ export class ProductScraper {
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--disable-dev-shm-usage',
+                '--disable-webrtc',
                 '--disable-infobars',
                 `--window-size=${CONFIG.VIEWPORT.width},${CONFIG.VIEWPORT.height}`
             ]
@@ -105,9 +113,9 @@ export class ProductScraper {
     }
 
     /**
-     * Closes the browser and the error log stream.
+     * Closes the browser and the error log stream gracefully.
      */
-    async close() {
+    async close(): Promise<void> {
         if (this.browser) {
             await this.browser.close();
             this.browser = null;
@@ -118,7 +126,7 @@ export class ProductScraper {
     }
 
     /**
-     * Processes a list of SKUs in batches.
+     * Processes a list of SKUs in batches to respect concurrency limits.
      *
      * @param skus - An array of SKU objects to process.
      * @returns A promise resolving to an array of scraped Product objects.
@@ -144,7 +152,8 @@ export class ProductScraper {
     }
 
     /**
-     * Handles the scraping process for a single SKU within an isolated context.
+     * Orchestrates the scraping process for a single SKU.
+     * Handles context creation, execution, error catching, and cleanup.
      *
      * @param sku - The SKU input object.
      * @returns The Product object (filled or fallback error).
@@ -152,19 +161,9 @@ export class ProductScraper {
     private async scrapeSingleSKU(sku: SKUInput): Promise<Product> {
         if (!this.browser) return this.createFallbackProduct(sku, "Browser not initialized");
 
-        let context;
+        let context: BrowserContext | null = null;
         try {
-            context = await this.browser.newContext({
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                viewport: CONFIG.VIEWPORT,
-                locale: 'en-US',
-                deviceScaleFactor: 1,
-                extraHTTPHeaders: {
-                    'Accept-Language': 'en-US,en;q=0.9',
-                }
-            });
-
-            await context.route('**/*.{png,jpg,jpeg,gif,webp,css,woff,woff2}', route => route.abort());
+            context = await this.createBrowserContext();
         } catch (e) {
             return this.createFallbackProduct(sku, "Context Creation Failed");
         }
@@ -191,7 +190,30 @@ export class ProductScraper {
     }
 
     /**
-     * Navigates to the product page and extracts data.
+     * Creates and configures a new browser context.
+     * Sets user agents, viewports, and blocks unnecessary resources (images, fonts).
+     *
+     * @returns A configured BrowserContext.
+     */
+    private async createBrowserContext(): Promise<BrowserContext> {
+        if (!this.browser) throw new Error("Browser not ready");
+
+        const context = await this.browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            viewport: CONFIG.VIEWPORT,
+            locale: 'en-US',
+            deviceScaleFactor: 1,
+            extraHTTPHeaders: {
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
+        });
+
+        await context.route('**/*.{png,jpg,jpeg,gif,webp}', route => route.abort());
+        return context;
+    }
+
+    /**
+     * Main workflow to navigate, validate, and extract data from a product page.
      *
      * @param page - The Playwright Page object.
      * @param sku - The SKU input object.
@@ -201,31 +223,114 @@ export class ProductScraper {
         const selectors = SELECTORS_MAP[sku.Type];
         if (!selectors) throw new Error("Selectors not mapped");
 
-        const url = sku.Type === 'Walmart'
+        const url = this.resolveProductUrl(sku);
+
+        await this.navigateToPage(page, url);
+        await this.handleSoftBlock(page, sku);
+        await this.checkForBotDetection(page);
+
+        await this.humanizeInteraction(page);
+        await this.waitForProductContent(page, selectors);
+
+        const data = await this.extractData(page, selectors);
+        await this.validateExtractedData(data, page);
+
+        return {
+            SKU: sku.SKU,
+            Source: sku.Type,
+            ...data
+        } as Product;
+    }
+
+    /**
+     * Resolves the target URL based on the SKU type.
+     *
+     * @param sku - The SKU input object.
+     * @returns The formatted URL string.
+     */
+    private resolveProductUrl(sku: SKUInput): string {
+        return sku.Type === 'Walmart'
             ? `https://www.walmart.com/ip/${sku.SKU}`
             : `https://www.amazon.com/dp/${sku.SKU}`;
+    }
 
+    /**
+     * Navigates to the specific URL and performs basic HTTP status validation.
+     *
+     * @param page - The Playwright Page object.
+     * @param url - The target URL.
+     * @throws Error if response is missing or status indicates failure.
+     */
+    private async navigateToPage(page: Page, url: string): Promise<void> {
         const response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: CONFIG.PAGE_TIMEOUT});
 
         if (!response) throw new Error("No Response");
         if (response.status() === 404) throw new Error("Page Not Found (404)");
         if (response.status() > 399) throw new Error(`HTTP Error: ${response.status()}`);
+    }
 
+    /**
+     * Handles specific soft-blocking mechanisms (e.g., "Continue shopping" interstitial).
+     *
+     * @param page - The Playwright Page object.
+     * @param sku - The SKU object, used specifically for logging.
+     */
+    private async handleSoftBlock(page: Page, sku: SKUInput): Promise<void> {
+        try {
+            const continueBtn = page.locator('text="Continue shopping"').first();
+
+            if (await continueBtn.isVisible({timeout: 2000})) {
+                console.log(`${new Date().toISOString()}: Soft block detected for ${sku.SKU}. Clicking "Continue shopping"...`);
+
+                await Promise.all([
+                    page.waitForURL('**', {waitUntil: 'domcontentloaded', timeout: CONFIG.PAGE_TIMEOUT}),
+                    continueBtn.click()
+                ]);
+
+                await this.randomDelay(2000, 4000);
+            }
+        } catch (e) {
+            // Ignored as per original logic implies this is optional/best-effort
+        }
+    }
+
+    /**
+     * Checks page titles for common anti-bot signatures.
+     *
+     * @param page - The Playwright Page object.
+     * @throws Error if bot detection or invalid page titles are found.
+     */
+    private async checkForBotDetection(page: Page): Promise<void> {
         const title = await page.title();
         if (title.includes("Robot") || title.includes("Captcha") || title.includes("Sorry") || title.includes("Page Not Found")) {
             throw new Error("Anti-bot detected or Invalid Page");
         }
+    }
 
-        await this.humanizeInteraction(page);
-
+    /**
+     * Waits for the primary product element to ensure the page has loaded relevant content.
+     *
+     * @param page - The Playwright Page object.
+     * @param selectors - The selector configuration.
+     * @throws Error if the title element does not appear within the timeout.
+     */
+    private async waitForProductContent(page: Page, selectors: SelectorConfig): Promise<void> {
         try {
-            await page.waitForSelector(selectors.title, { state: 'visible', timeout: CONFIG.LOCATOR_TIMEOUT });
+            await page.waitForSelector(selectors.title, {state: 'visible', timeout: CONFIG.LOCATOR_TIMEOUT});
         } catch (e) {
             throw new Error("Timeout: Product title never appeared on screen");
         }
+    }
 
-        const data = await this.extractData(page, selectors);
-
+    /**
+     * Validates that the extracted data contains essential information.
+     * Checks specific body text for unavailability if the title is missing.
+     *
+     * @param data - The extracted product data.
+     * @param page - The Playwright Page object.
+     * @throws Error if the product is unavailable or validation fails.
+     */
+    private async validateExtractedData(data: { Title: string }, page: Page): Promise<void> {
         if (!data.Title || data.Title === '') {
             const bodyText = await page.locator('body').innerText();
             if (bodyText.includes("Currently unavailable")) {
@@ -233,12 +338,6 @@ export class ProductScraper {
             }
             throw new Error("Validation Failed: Content loaded but Title is empty");
         }
-
-        return {
-            SKU: sku.SKU,
-            Source: sku.Type,
-            ...data
-        } as Product;
     }
 
     /**
@@ -278,6 +377,7 @@ export class ProductScraper {
      *
      * @param sku - The SKU input.
      * @param reason - The error message.
+     * @returns A Product object with error details.
      */
     private createFallbackProduct(sku: SKUInput, reason: string): Product {
         return {
@@ -291,16 +391,17 @@ export class ProductScraper {
     }
 
     /**
-     * Simulates basic human interaction.
+     * Simulates basic human interaction (mouse movement and scrolling).
      *
      * @param page - The Playwright Page object.
      */
-    private async humanizeInteraction(page: Page) {
+    private async humanizeInteraction(page: Page): Promise<void> {
         try {
             await page.mouse.move(100, 100);
             await page.mouse.wheel(0, 200);
             await this.randomDelay(500, 1000);
         } catch (e) {
+            // Interaction failed, possibly due to page closing or navigation
         }
     }
 
@@ -309,8 +410,9 @@ export class ProductScraper {
      *
      * @param min - Minimum delay in ms.
      * @param max - Maximum delay in ms.
+     * @returns A promise that resolves after the delay.
      */
-    private async randomDelay(min: number, max: number) {
+    private async randomDelay(min: number, max: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1) + min)));
     }
 
@@ -321,7 +423,7 @@ export class ProductScraper {
      * @param sku - Product SKU.
      * @param error - The error encountered.
      */
-    private logError(type: string, sku: string, error: unknown) {
+    private logError(type: string, sku: string, error: unknown): void {
         const msg = error instanceof Error ? error.message : 'Unknown error';
         const logLine = `${new Date().toISOString()}: Error fetching ${type} product with SKU ${sku}: ${msg}\n`;
         if (this.errorStream.writable) {
