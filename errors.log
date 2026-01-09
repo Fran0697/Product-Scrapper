@@ -1,9 +1,9 @@
-2026-01-09T04:46:59.776Z: Error fetching Amazon product with SKU B01LR5S6HK
-2026-01-09T04:48:39.783Z: Error fetching Amazon product with SKU B0CT4BB651
-2026-01-09T04:48:43.029Z: Error fetching Amazon product with SKU B01LR5S6HK
-2026-01-09T04:49:03.290Z: Error fetching Amazon product with SKU B0CT4BB651
-2026-01-09T04:49:06.213Z: Error fetching Amazon product with SKU B01LR5S6HK
-2026-01-09T04:50:40.537Z: Error fetching Amazon product with SKU B0CT4BB651
-2026-01-09T04:50:40.549Z: Error fetching Walmart product with SKU 5326288985
-2026-01-09T04:50:40.549Z: Error fetching Amazon product with SKU B01LR5S6HK
-2026-01-09T04:51:21.712Z: Error fetching Amazon product with SKU B01LR5S6HK
+2026-01-09T16:27:02.584Z: Error fetching Amazon product with SKU B0CT4BB651: Failed to fetch Amazon product with SKU B0CT4BB651: locator.innerText: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('#productTitle').first()[22m
+
+2026-01-09T16:27:02.801Z: Error fetching Walmart product with SKU 5326288985: Failed to fetch Walmart product with SKU 5326288985
+2026-01-09T16:27:03.232Z: Error fetching Amazon product with SKU B01LR5S6HK: Failed to fetch Amazon product with SKU B01LR5S6HK: locator.innerText: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('#productDescription span').first()[22m
+

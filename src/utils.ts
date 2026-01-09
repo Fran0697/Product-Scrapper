@@ -22,7 +22,6 @@ export const csvWriterInstance = csvWriter.createObjectCsvWriter({
     ]
 });
 
-//TODO First one works, second request not.
 export const fetchAmazonProduct = async (page: Page, sku: string): Promise<Product | null> => {
     try {
         await page.goto(`https://www.amazon.com/dp/${sku}`);
@@ -41,7 +40,11 @@ export const fetchAmazonProduct = async (page: Page, sku: string): Promise<Produ
             'Number of Reviews': reviews || ''
         };
     } catch (error) {
-        throw new Error(`Failed to fetch Amazon product with SKU ${sku}`);
+        if (error instanceof Error) {
+            throw new Error(`Failed to fetch Amazon product with SKU ${sku}: ${error.message}`);
+        } else {
+            throw new Error(`Failed to fetch Amazon product with SKU ${sku}: An unknown error occurred\n`);
+        }
     }
 };
 
