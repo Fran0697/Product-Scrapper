@@ -3,7 +3,7 @@ import * as csvWriter from "csv-writer";
 import fs from "fs";
 
 const errorLog = fs.createWriteStream('errors.log', {flags: 'a'});
-const infoLog = fs.createWriteStream('info.log', {flags: 'a'});
+export const LOCATOR_TIMEOUT = 5000;
 
 export interface Product {
     SKU: string;
@@ -26,6 +26,10 @@ export const csvWriterInstance = csvWriter.createObjectCsvWriter({
     ]
 });
 
+const getTextWithTimeout = async (page: Page, selector: string): Promise<string> => {
+    return await page.locator(selector).first().innerText({timeout: LOCATOR_TIMEOUT});
+};
+
 const fetchAmazonProduct = async (page: Page, sku: string): Promise<Product | null> => {
     try {
         await page.goto(`https://www.amazon.com/dp/${sku}`);
@@ -41,10 +45,10 @@ const fetchAmazonProduct = async (page: Page, sku: string): Promise<Product | nu
             };
         }
 
-        const title = await page.locator('#productTitle').first().innerText();
-        const description = await page.locator('#productDescription span').first().innerText();
-        const price = await page.locator('.a-price-whole').first().innerText();
-        const reviews = await page.locator('#acrCustomerReviewText').first().innerText();
+        const title = await getTextWithTimeout(page, '#productTitle');
+        const description = await getTextWithTimeout(page, '#productDescription span');
+        const price = await getTextWithTimeout(page, '.a-price-whole');
+        const reviews = await getTextWithTimeout(page, '#acrCustomerReviewText');
 
         return {
             SKU: sku,
@@ -68,10 +72,10 @@ const fetchWalmartProduct = async (page: Page, sku: string): Promise<Product | n
     try {
         await page.goto(`https://www.walmart.com/ip/${sku}`);
 
-        const title = await page.locator('#productTitle').first().innerText();
-        const description = await page.locator('#productDescription span').first().innerText();
-        const price = await page.locator('.a-price-whole').first().innerText();
-        const reviews = await page.locator('#acrCustomerReviewText').first().innerText();
+        const title = await getTextWithTimeout(page, '#productTitle');
+        const description = await getTextWithTimeout(page, '#productDescription span');
+        const price = await getTextWithTimeout(page, '.a-price-whole');
+        const reviews = await getTextWithTimeout(page, '#acrCustomerReviewText');
 
         return {
             SKU: sku,
@@ -94,17 +98,17 @@ const initializeBrowser = async () => {
 };
 
 const processAmazonSKU = async (page: Page, sku: string): Promise<Product | null> => {
-    infoLog.write(`${new Date().toISOString()}: Fetching Amazon product with SKU ${sku}\n`);
+    console.log(`${new Date().toISOString()}: Fetching Amazon product with SKU ${sku}`);
     return await fetchAmazonProduct(page, sku);
 };
 
 const processWalmartSKU = async (page: Page, sku: string): Promise<Product | null> => {
-    infoLog.write(`${new Date().toISOString()}: Fetching Walmart product with SKU ${sku}\n`);
+    console.log(`${new Date().toISOString()}: Fetching Walmart product with SKU ${sku}`);
     return await fetchWalmartProduct(page, sku);
 };
 
 const processSKU = async (sku: { Type: string, SKU: string }): Promise<Product | null> => {
-    infoLog.write(`${new Date().toISOString()}: Starting task for ${sku.Type} product with SKU ${sku.SKU}\n`);
+    console.log(`${new Date().toISOString()}: Starting task for ${sku.Type} product with SKU ${sku.SKU}`);
     const {browser, page} = await initializeBrowser();
     try {
         let product: Product | null = null;
@@ -119,7 +123,7 @@ const processSKU = async (sku: { Type: string, SKU: string }): Promise<Product |
         return null;
     } finally {
         await browser.close();
-        infoLog.write(`${new Date().toISOString()}: Finished task for ${sku.Type} product with SKU ${sku.SKU}\n`);
+        console.log(`${new Date().toISOString()}: Finished task for ${sku.Type} product with SKU ${sku.SKU}`);
     }
 };
 
