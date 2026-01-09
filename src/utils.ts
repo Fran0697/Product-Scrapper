@@ -1,5 +1,9 @@
-import {type Page} from 'playwright';
+import {chromium, type Page} from 'playwright';
 import * as csvWriter from "csv-writer";
+import fs from "fs";
+
+const errorLog = fs.createWriteStream('errors.log', {flags: 'a'});
+const infoLog = fs.createWriteStream('info.log', {flags: 'a'});
 
 export interface Product {
     SKU: string;
@@ -22,9 +26,20 @@ export const csvWriterInstance = csvWriter.createObjectCsvWriter({
     ]
 });
 
-export const fetchAmazonProduct = async (page: Page, sku: string): Promise<Product | null> => {
+const fetchAmazonProduct = async (page: Page, sku: string): Promise<Product | null> => {
     try {
         await page.goto(`https://www.amazon.com/dp/${sku}`);
+
+        if (await page.isVisible('text="Page Not Found"')) {
+            return {
+                SKU: sku,
+                Source: 'Amazon',
+                Title: 'Item not found on Amazon',
+                Description: 'The item with the specified SKU could not be found on Amazon.',
+                Price: '',
+                'Number of Reviews': ''
+            };
+        }
 
         const title = await page.locator('#productTitle').first().innerText();
         const description = await page.locator('#productDescription span').first().innerText();
@@ -49,7 +64,7 @@ export const fetchAmazonProduct = async (page: Page, sku: string): Promise<Produ
 };
 
 //TODO Implement this. Just a place holder
-export const fetchWalmartProduct = async (page: Page, sku: string): Promise<Product | null> => {
+const fetchWalmartProduct = async (page: Page, sku: string): Promise<Product | null> => {
     try {
         await page.goto(`https://www.walmart.com/ip/${sku}`);
 
@@ -69,4 +84,58 @@ export const fetchWalmartProduct = async (page: Page, sku: string): Promise<Prod
     } catch (error) {
         throw new Error(`Failed to fetch Walmart product with SKU ${sku}`);
     }
+};
+
+const initializeBrowser = async () => {
+    const browser = await chromium.launch({headless: true});
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    return {browser, page};
+};
+
+const processAmazonSKU = async (page: Page, sku: string): Promise<Product | null> => {
+    infoLog.write(`${new Date().toISOString()}: Fetching Amazon product with SKU ${sku}\n`);
+    return await fetchAmazonProduct(page, sku);
+};
+
+const processWalmartSKU = async (page: Page, sku: string): Promise<Product | null> => {
+    infoLog.write(`${new Date().toISOString()}: Fetching Walmart product with SKU ${sku}\n`);
+    return await fetchWalmartProduct(page, sku);
+};
+
+const processSKU = async (sku: { Type: string, SKU: string }): Promise<Product | null> => {
+    infoLog.write(`${new Date().toISOString()}: Starting task for ${sku.Type} product with SKU ${sku.SKU}\n`);
+    const {browser, page} = await initializeBrowser();
+    try {
+        let product: Product | null = null;
+        if (sku.Type === 'Amazon') {
+            product = await processAmazonSKU(page, sku.SKU);
+        } else if (sku.Type === 'Walmart') {
+            product = await processWalmartSKU(page, sku.SKU);
+        }
+        return product;
+    } catch (error: unknown) {
+        logError(error, sku.Type, sku.SKU);
+        return null;
+    } finally {
+        await browser.close();
+        infoLog.write(`${new Date().toISOString()}: Finished task for ${sku.Type} product with SKU ${sku.SKU}\n`);
+    }
+};
+
+const logError = (error: unknown, type: string, sku: string) => {
+    if (error instanceof Error) {
+        errorLog.write(`${new Date().toISOString()}: Error fetching ${type} product with SKU ${sku}: ${error.message}\n`);
+    } else {
+        errorLog.write(`${new Date().toISOString()}: Error fetching ${type} product with SKU ${sku}: An unknown error occurred\n`);
+    }
+};
+
+export const processSKUs = async (skus: { Type: string, SKU: string }[]): Promise<Product[]> => {
+    const tasks: Promise<Product | null>[] = [];
+    for (const sku of skus) {
+        tasks.push(processSKU(sku));
+    }
+    const products = await Promise.all(tasks);
+    return products.filter((product): product is Product => product !== null);
 };
