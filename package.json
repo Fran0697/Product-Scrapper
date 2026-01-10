@@ -1,5 +1,6 @@
 {
   "name": "product-scraper",
+  "bin": "dist/scraper.cjs",
   "type": "module",
   "private": true,
   "scripts": {
@@ -8,11 +9,13 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/jest": "^30.0.0",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.6",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.21.0"
+    "@types/jest": "30.0.0",
+    "jest": "30.2.0",
+    "pkg": "5.8.1",
+    "ts-jest": "29.4.6",
+    "ts-node": "10.9.2",
+    "tsup": "8.5.1",
+    "tsx": "4.21.0"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
@@ -22,5 +25,10 @@
     "playwright": "1.57.0",
     "playwright-extra": "4.3.6",
     "puppeteer-extra-plugin-stealth": "2.11.2"
+  },
+  "pkg": {
+    "assets": [
+      "node_modules/puppeteer-extra-plugin-stealth/**/*"
+    ]
   }
 }

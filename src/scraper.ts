@@ -25,19 +25,21 @@ const runScraper = async () => {
         console.error("Critical Error:", message);
     } finally {
         await scraper.close();
-
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-
-        await new Promise(resolve => {
-            rl.question('\nPress Enter to close the program...', () => {
-                rl.close();
-                resolve(null);
-            });
-        });
     }
 };
 
-await runScraper();
+(async () => {
+    await runScraper();
+
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    await new Promise(resolve => {
+        rl.question('\nPresiona ENTER para cerrar este programa...', () => {
+            rl.close();
+            resolve(null);
+        });
+    });
+})();
