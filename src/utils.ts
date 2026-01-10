@@ -1,21 +1,52 @@
-import {type Page, type Browser, type BrowserContext} from 'playwright';
+import {type Page, type Browser, type BrowserContext, type Locator} from 'playwright';
 import {createObjectCsvWriter} from "csv-writer";
 import {chromium} from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 import * as fs from 'fs';
 
+chromium.use(stealth());
+
 /**
- * Configuration object for the scraper settings.
+ * Global configuration settings for the scraper.
+ * Contains timeouts, concurrency limits, viewport settings, and anti-bot behavior parameters.
  */
 export const CONFIG = {
     LOCATOR_TIMEOUT: 10000,
     PAGE_TIMEOUT: 30000,
     CONCURRENCY_LIMIT: 3,
-    VIEWPORT: {width: 1920, height: 1080}
+    VIEWPORT: {width: 1920, height: 1080},
+    CAPTCHA_WAIT_STABILIZE: 10000,
+    CAPTCHA_HOLD_MIN: 10000,
+    CAPTCHA_HOLD_RANDOM: 3000,
+    BATCH_DELAY_MIN: 1000,
+    BATCH_DELAY_MAX: 3000,
+    HUMAN_DELAY_MIN: 1000,
+    HUMAN_DELAY_MAX: 5000,
+    AMAZON_CONTINUE_WAIT: 15000,
+    AMAZON_POST_CLICK_DELAY_MIN: 5000,
+    AMAZON_POST_CLICK_DELAY_MAX: 15000,
+    WALMART_POST_CAPTCHA_DELAY_MIN: 10000,
+    WALMART_POST_CAPTCHA_DELAY_MAX: 20000,
+    EXTRACT_TEXT_TIMEOUT: 2000,
+    INTERNAL_NAVIGATION_TIMEOUT: 10000,
+    MOUSE_START_X: 100,
+    MOUSE_START_Y: 100,
+    WHEEL_SCROLL_X: 0,
+    WHEEL_SCROLL_Y: 200,
+    DESCRIPTION_MAX_LENGTH: 500,
+    FALLBACK_DESCRIPTION: 'FAILED',
+    EMPTY_STRING: '',
+    USER_AGENTS: [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ],
+    LOCALE: 'en-US'
 };
 
 /**
- * Interface representing a product with various attributes.
+ * Represents the standardized structure of scraped product data.
  */
 export interface Product {
     SKU: string;
@@ -27,43 +58,43 @@ export interface Product {
 }
 
 /**
- * Interface for the input SKU data.
+ * Represents the input required to initiate a scraping task for a specific item.
  */
 export interface SKUInput {
-    Type: string;
+    Type: 'Amazon' | 'Walmart' | string;
     SKU: string;
 }
 
 /**
- * Configuration structure for DOM selectors.
+ * Defines the CSS selectors used to extract specific data points for a given retailer.
  */
 type SelectorConfig = {
-    title: string;
-    description: string;
-    price: string;
-    reviews: string;
+    title: string[];
+    description: string[];
+    price: string[];
+    reviews: string[];
 };
 
 /**
- * Map of selectors for different supported sources.
+ * Maps retailer names to their respective CSS selector configurations.
  */
 const SELECTORS_MAP: Record<string, SelectorConfig> = {
     Amazon: {
-        title: '#productTitle, #title, .qa-title-text',
-        description: '#productDescription',
-        price: '.a-price .a-offscreen, #corePriceDisplay_desktop_feature_div span, .a-color-price',
-        reviews: '#acrCustomerReviewText, #acrCustomerReviewLink'
+        title: ['#productTitle', '#title', '.qa-title-text'],
+        description: ['#productDescription', '#feature-bullets'],
+        price: ['.a-price .a-offscreen', '#corePriceDisplay_desktop_feature_div span', '.a-color-price'],
+        reviews: ['#acrCustomerReviewText', '#acrCustomerReviewLink']
     },
     Walmart: {
-        title: 'h1, [itemprop="name"]',
-        description: '.product-description, [data-testid="product-description"], .w_A',
-        price: '[itemprop="price"], .price-display .display-price, [data-testid="price-wrap"]',
-        reviews: '.rating-number, [data-testid="reviews-count"], .w_D'
+        title: ['h1', '[itemprop="name"]'],
+        description: ['.product-description', '[data-testid="product-description"]', '.w_A'],
+        price: ['[itemprop="price"]', '.price-display .display-price', '[data-testid="price-wrap"]'],
+        reviews: ['.rating-number', '[data-testid="reviews-count"]', '.w_D']
     }
 };
 
 /**
- * CSV writer instance for writing product data to a CSV file.
+ * The CSV writer instance configured with headers matching the Product interface.
  */
 export const csvWriterInstance = createObjectCsvWriter({
     path: 'product_data.csv',
@@ -78,28 +109,28 @@ export const csvWriterInstance = createObjectCsvWriter({
 });
 
 /**
- * Class for scraping product data with performance optimizations and bot evasion.
+ * Manages the browser lifecycle and executes scraping tasks for Amazon and Walmart products.
+ * Handles concurrency, anti-bot detection, and error logging.
  */
 export class ProductScraper {
     private browser: Browser | null = null;
     private readonly errorStream: fs.WriteStream;
 
     /**
-     * Initializes the scraper with stealth plugins and error logging stream.
+     * Initializes the ProductScraper and sets up the error logging stream.
      */
     constructor() {
-        chromium.use(stealth());
         this.errorStream = fs.createWriteStream('errors.log', {flags: 'a'});
     }
 
     /**
-     * Initializes the browser instance if it is not already active.
-     * Uses optimization arguments to reduce resource consumption.
+     * Launches the Chromium browser with specific flags to reduce bot detection.
+     * If the browser is already initialized, this method does nothing.
      */
     async init(): Promise<void> {
         if (this.browser) return;
         this.browser = await chromium.launch({
-            headless: false,
+            headless: true,
             channel: 'chrome',
             args: [
                 '--disable-blink-features=AutomationControlled',
@@ -107,13 +138,16 @@ export class ProductScraper {
                 '--disable-dev-shm-usage',
                 '--disable-webrtc',
                 '--disable-infobars',
+                '--disable-setuid-sandbox',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
                 `--window-size=${CONFIG.VIEWPORT.width},${CONFIG.VIEWPORT.height}`
             ]
         });
     }
 
     /**
-     * Closes the browser and the error log stream gracefully.
+     * Closes the browser instance and terminates the error log stream.
      */
     async close(): Promise<void> {
         if (this.browser) {
@@ -126,26 +160,37 @@ export class ProductScraper {
     }
 
     /**
-     * Processes a list of SKUs in batches to respect concurrency limits.
-     *
-     * @param skus - An array of SKU objects to process.
-     * @returns A promise resolving to an array of scraped Product objects.
+     * Processes a list of SKUs in batches based on the configured concurrency limit.
+     * * @param skus - An array of SKUInput objects containing the SKU and retailer type.
+     * @returns A promise that resolves to an array of scraped Product objects.
      */
     async processSKUs(skus: SKUInput[]): Promise<Product[]> {
         await this.init();
         const results: Product[] = [];
+        const queue = [...skus];
+        const activeWorkers: Promise<void>[] = [];
 
-        for (let i = 0; i < skus.length; i += CONFIG.CONCURRENCY_LIMIT) {
-            const chunk = skus.slice(i, i + CONFIG.CONCURRENCY_LIMIT);
-            console.log(`${new Date().toISOString()}: Processing batch ${Math.floor(i / CONFIG.CONCURRENCY_LIMIT) + 1} / ${Math.ceil(skus.length / CONFIG.CONCURRENCY_LIMIT)}...`);
+        console.log(`${new Date().toISOString()}: Starting processing pool for ${skus.length} SKUs with concurrency ${CONFIG.CONCURRENCY_LIMIT}`);
 
-            const batchResults = await Promise.all(
-                chunk.map(sku => this.scrapeSingleSKU(sku))
-            );
+        while (queue.length > 0 || activeWorkers.length > 0) {
+            while (queue.length > 0 && activeWorkers.length < CONFIG.CONCURRENCY_LIMIT) {
+                const sku = queue.shift();
+                if (sku) {
+                    const worker = this.scrapeSingleSKU(sku).then(product => {
+                        results.push(product);
+                    });
 
-            results.push(...batchResults);
+                    const workerPromise = worker.finally(() => {
+                        activeWorkers.splice(activeWorkers.indexOf(workerPromise), 1);
+                    });
 
-            await this.randomDelay(1000, 3000);
+                    activeWorkers.push(workerPromise);
+                }
+            }
+
+            if (activeWorkers.length > 0) {
+                await Promise.race(activeWorkers);
+            }
         }
 
         return results;
@@ -153,28 +198,22 @@ export class ProductScraper {
 
     /**
      * Orchestrates the scraping process for a single SKU.
-     * Handles context creation, execution, error catching, and cleanup.
-     *
-     * @param sku - The SKU input object.
-     * @returns The Product object (filled or fallback error).
+     * Handles context creation, data fetching, error handling, and cleanup.
+     * * @param sku - The SKU input data.
+     * @returns A promise resolving to the scraped Product or a fallback error object.
      */
     private async scrapeSingleSKU(sku: SKUInput): Promise<Product> {
         if (!this.browser) return this.createFallbackProduct(sku, "Browser not initialized");
 
         let context: BrowserContext | null = null;
+        let page: Page | null = null;
+        let product: Product;
+
         try {
             context = await this.createBrowserContext();
-        } catch (e) {
-            return this.createFallbackProduct(sku, "Context Creation Failed");
-        }
-
-        let product: Product;
-        let page: Page | null = null;
-
-        try {
             page = await context.newPage();
-            console.log(`${new Date().toISOString()}: Starting task for ${sku.Type} product with SKU ${sku.SKU}`);
 
+            console.log(`${new Date().toISOString()}: Starting task for ${sku.Type} product with SKU ${sku.SKU}`);
             product = await this.fetchProductData(page, sku);
 
         } catch (error) {
@@ -182,7 +221,10 @@ export class ProductScraper {
             this.logError(sku.Type, sku.SKU, error);
             product = this.createFallbackProduct(sku, `ERROR: ${errorMessage}`);
         } finally {
-            if (context) await context.close();
+            try {
+                if (page) await page.close();
+                if (context) await context.close();
+            } catch (e) {}
             console.log(`${new Date().toISOString()}: Finished task for ${sku.Type} product with SKU ${sku.SKU}`);
         }
 
@@ -190,34 +232,39 @@ export class ProductScraper {
     }
 
     /**
-     * Creates and configures a new browser context.
-     * Sets user agents, viewports, and blocks unnecessary resources (images, fonts).
-     *
-     * @returns A configured BrowserContext.
+     * Creates a new browser context with randomized user agent and specific locale settings.
+     * Blocks requests for media and font resources to improve performance.
+     * * @returns A configured BrowserContext.
      */
     private async createBrowserContext(): Promise<BrowserContext> {
         if (!this.browser) throw new Error("Browser not ready");
 
+        const userAgent = CONFIG.USER_AGENTS[Math.floor(Math.random() * CONFIG.USER_AGENTS.length)];
+
         const context = await this.browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            userAgent: userAgent,
             viewport: CONFIG.VIEWPORT,
-            locale: 'en-US',
+            locale: CONFIG.LOCALE,
             deviceScaleFactor: 1,
+            hasTouch: false,
+            isMobile: false,
+            permissions: ['geolocation'],
             extraHTTPHeaders: {
                 'Accept-Language': 'en-US,en;q=0.9',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             }
         });
 
-        await context.route('**/*.{png,jpg,jpeg,gif,webp}', route => route.abort());
+        await context.route('**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,eot,css}', route => route.abort());
         return context;
     }
 
     /**
-     * Main workflow to navigate, validate, and extract data from a product page.
-     *
+     * Navigates to the product page and orchestrates the extraction logic.
+     * Includes handling for blocks, bot detection, human-like interaction, and validation.
      * @param page - The Playwright Page object.
-     * @param sku - The SKU input object.
-     * @returns The Product object or throws an error.
+     * @param sku - The SKU input data.
+     * @returns The extracted Product data.
      */
     private async fetchProductData(page: Page, sku: SKUInput): Promise<Product> {
         const selectors = SELECTORS_MAP[sku.Type];
@@ -239,14 +286,13 @@ export class ProductScraper {
             SKU: sku.SKU,
             Source: sku.Type,
             ...data
-        } as Product;
+        };
     }
 
     /**
-     * Resolves the target URL based on the SKU type.
-     *
-     * @param sku - The SKU input object.
-     * @returns The formatted URL string.
+     * Constructs the full product URL based on the retailer type and SKU.
+     * * @param sku - The SKU input data.
+     * @returns The full URL string.
      */
     private resolveProductUrl(sku: SKUInput): string {
         return sku.Type === 'Walmart'
@@ -255,11 +301,10 @@ export class ProductScraper {
     }
 
     /**
-     * Navigates to the specific URL and performs basic HTTP status validation.
-     *
+     * Navigates the page to the specified URL and checks for HTTP errors.
      * @param page - The Playwright Page object.
-     * @param url - The target URL.
-     * @throws Error if response is missing or status indicates failure.
+     * @param url - The URL to navigate to.
+     * @throws Error if the response is empty or the status code indicates failure.
      */
     private async navigateToPage(page: Page, url: string): Promise<void> {
         const response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: CONFIG.PAGE_TIMEOUT});
@@ -270,158 +315,203 @@ export class ProductScraper {
     }
 
     /**
-     * Handles specific soft-blocking mechanisms (e.g., "Continue shopping" interstitial).
-     *
+     * Routes soft-block handling to the specific logic for the retailer.
      * @param page - The Playwright Page object.
-     * @param sku - The SKU object, used specifically for logging.
+     * @param sku - The SKU input containing the retailer type.
      */
     private async handleSoftBlock(page: Page, sku: SKUInput): Promise<void> {
+        if (sku.Type === 'Amazon') await this.handleAmazonBlock(page);
+        else if (sku.Type === 'Walmart') await this.handleWalmartBlock(page);
+    }
+
+    /**
+     * Attempts to bypass Amazon's "soft block" interstitials (e.g., "Continue shopping").
+     * @param page - The Playwright Page object.
+     */
+    private async handleAmazonBlock(page: Page): Promise<void> {
         try {
             const continueBtn = page.locator('text="Continue shopping"').first();
-
-            if (await continueBtn.isVisible({timeout: 2000})) {
-                console.log(`${new Date().toISOString()}: Soft block detected for ${sku.SKU}. Clicking "Continue shopping"...`);
-
-                await Promise.all([
-                    page.waitForURL('**', {waitUntil: 'domcontentloaded', timeout: CONFIG.PAGE_TIMEOUT}),
-                    continueBtn.click()
-                ]);
-
-                await this.randomDelay(2000, 4000);
+            if (await continueBtn.isVisible({timeout: 1000})) {
+                await continueBtn.click();
+                await page.waitForLoadState('domcontentloaded');
+                await this.randomDelay(CONFIG.AMAZON_POST_CLICK_DELAY_MIN, CONFIG.AMAZON_POST_CLICK_DELAY_MAX);
             }
+        } catch (e) {}
+    }
+
+    /**
+     * Attempts to detect and resolve Walmart CAPTCHAs.
+     * @param page - The Playwright Page object.
+     */
+    private async handleWalmartBlock(page: Page): Promise<void> {
+        try {
+            const captchaBtn = await this.findWalmartCaptcha(page);
+            if (captchaBtn) await this.resolveWalmartCaptcha(page, captchaBtn);
         } catch (e) {
-            // Ignored as per original logic implies this is optional/best-effort
+            const msg = e instanceof Error ? e.message : 'Unknown';
+            console.log(`${new Date().toISOString()}: Warning - Error in Walmart captcha logic: ${msg}`);
         }
     }
 
     /**
-     * Checks page titles for common anti-bot signatures.
-     *
+     * Scans the page and iframes for known Walmart CAPTCHA selectors.
      * @param page - The Playwright Page object.
-     * @throws Error if bot detection or invalid page titles are found.
+     * @returns The CAPTCHA locator if found, otherwise null.
+     */
+    private async findWalmartCaptcha(page: Page): Promise<Locator | null> {
+        const possibleSelectors = ['#px-captcha', '#px-captcha-wrapper', '[aria-label="Press & Hold"]'];
+
+        for (const sel of possibleSelectors) {
+            const loc = page.locator(sel).first();
+            if (await loc.isVisible().catch(() => false)) return loc;
+        }
+
+        for (const frame of page.frames()) {
+            const loc = frame.locator('#px-captcha').first();
+            if (await loc.isVisible().catch(() => false)) return loc;
+        }
+        return null;
+    }
+
+    /**
+     * Simulates a "Press & Hold" interaction to solve Walmart CAPTCHAs.
+     * @param page - The Playwright Page object.
+     * @param captchaBtn - The locator for the CAPTCHA button.
+     */
+    private async resolveWalmartCaptcha(page: Page, captchaBtn: Locator): Promise<void> {
+        await page.waitForTimeout(CONFIG.CAPTCHA_WAIT_STABILIZE);
+        const box = await captchaBtn.boundingBox().catch(() => null);
+
+        if (!box) return;
+
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        const holdDuration = CONFIG.CAPTCHA_HOLD_MIN + Math.floor(Math.random() * CONFIG.CAPTCHA_HOLD_RANDOM);
+        await page.waitForTimeout(holdDuration);
+        await page.mouse.up();
+
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await this.randomDelay(CONFIG.WALMART_POST_CAPTCHA_DELAY_MIN, CONFIG.WALMART_POST_CAPTCHA_DELAY_MAX);
+    }
+
+    /**
+     * Checks the page title for keywords indicating bot detection or request blocking.
+     * @param page - The Playwright Page object.
+     * @throws Error if bot detection keywords are found in the title.
      */
     private async checkForBotDetection(page: Page): Promise<void> {
-        const title = await page.title();
-        if (title.includes("Robot") || title.includes("Captcha") || title.includes("Sorry") || title.includes("Page Not Found")) {
+        const title = await page.title().catch(() => CONFIG.EMPTY_STRING);
+        if (/Robot|Captcha|Sorry|Page Not Found/i.test(title)) {
             throw new Error("Anti-bot detected or Invalid Page");
         }
     }
 
     /**
-     * Waits for the primary product element to ensure the page has loaded relevant content.
-     *
+     * Waits for the product title selector to become visible to ensure content is loaded.
      * @param page - The Playwright Page object.
-     * @param selectors - The selector configuration.
-     * @throws Error if the title element does not appear within the timeout.
+     * @param selectors - The selector configuration for the current retailer.
      */
     private async waitForProductContent(page: Page, selectors: SelectorConfig): Promise<void> {
         try {
-            await page.waitForSelector(selectors.title, {state: 'visible', timeout: CONFIG.LOCATOR_TIMEOUT});
-        } catch (e) {
+            const combinedSelectors = selectors.title.join(',');
+            await page.waitForSelector(combinedSelectors, {state: 'visible', timeout: CONFIG.LOCATOR_TIMEOUT});
+        } catch {
             throw new Error("Timeout: Product title never appeared on screen");
         }
     }
 
     /**
-     * Validates that the extracted data contains essential information.
-     * Checks specific body text for unavailability if the title is missing.
-     *
-     * @param data - The extracted product data.
-     * @param page - The Playwright Page object.
-     * @throws Error if the product is unavailable or validation fails.
+     * Validates that the extracted data contains essential fields (e.g., Title).
+     * Checks for specific "Currently unavailable" states if the title is missing.
+     * @param data - The partial extracted data.
+     * @param page - The Playwright Page object for further inspection if validation fails.
      */
     private async validateExtractedData(data: { Title: string }, page: Page): Promise<void> {
-        if (!data.Title || data.Title === '') {
-            const bodyText = await page.locator('body').innerText();
-            if (bodyText.includes("Currently unavailable")) {
-                throw new Error("Product Currently Unavailable");
-            }
+        if (!data.Title) {
+            const bodyText = await page.locator('body').innerText().catch(() => CONFIG.EMPTY_STRING);
+            if (bodyText.includes("Currently unavailable")) throw new Error("Product Currently Unavailable");
             throw new Error("Validation Failed: Content loaded but Title is empty");
         }
     }
 
     /**
-     * Extracts text content using the provided selectors.
-     *
+     * Extracts text content from the page using the provided selector configuration.
+     * iterates through potential selectors for each field until a match is found.
      * @param page - The Playwright Page object.
      * @param selectors - The selector configuration.
-     * @returns An object containing the extracted fields.
+     * @returns An object containing raw extracted strings for Title, Description, Price, and Reviews.
      */
     private async extractData(page: Page, selectors: SelectorConfig) {
-        const getText = async (sel: string) => {
-            try {
-                const el = page.locator(sel).first();
-                return await el.innerText({timeout: 1000});
-            } catch {
-                return '';
+        const getTextFromSelectors = async (selectorList: string[]) => {
+            for (const sel of selectorList) {
+                try {
+                    const el = page.locator(sel).first();
+                    if (await el.isVisible()) {
+                        return await el.innerText({timeout: CONFIG.EXTRACT_TEXT_TIMEOUT});
+                    }
+                } catch {}
             }
+            return CONFIG.EMPTY_STRING;
         };
 
         const [title, description, price, reviews] = await Promise.all([
-            getText(selectors.title),
-            getText(selectors.description),
-            getText(selectors.price),
-            getText(selectors.reviews)
+            getTextFromSelectors(selectors.title),
+            getTextFromSelectors(selectors.description),
+            getTextFromSelectors(selectors.price),
+            getTextFromSelectors(selectors.reviews)
         ]);
 
         return {
             Title: title.trim(),
-            Description: description.slice(0, 200).trim(),
+            Description: description.slice(0, CONFIG.DESCRIPTION_MAX_LENGTH).replace(/\s+/g, ' ').trim(),
             Price: price.replace(/\n/g, '').trim(),
             'Number of Reviews': reviews.trim()
         };
     }
 
     /**
-     * Creates a fallback product object when an error occurs.
-     *
-     * @param sku - The SKU input.
-     * @param reason - The error message.
-     * @returns A Product object with error details.
+     * Creates a fallback Product object filled with error information when scraping fails.
+     * @param sku - The SKU input data.
+     * @param reason - The error message or reason for failure.
+     * @returns A Product object reflecting the failure state.
      */
     private createFallbackProduct(sku: SKUInput, reason: string): Product {
         return {
             SKU: sku.SKU,
             Source: sku.Type,
             Title: reason,
-            Description: 'FAILED',
-            Price: '',
-            'Number of Reviews': ''
+            Description: CONFIG.FALLBACK_DESCRIPTION,
+            Price: CONFIG.EMPTY_STRING,
+            'Number of Reviews': CONFIG.EMPTY_STRING
         };
     }
 
     /**
-     * Simulates basic human interaction (mouse movement and scrolling).
-     *
+     * Performs random mouse movements and scrolling to simulate human behavior.
      * @param page - The Playwright Page object.
      */
     private async humanizeInteraction(page: Page): Promise<void> {
         try {
-            await page.mouse.move(100, 100);
-            await page.mouse.wheel(0, 200);
-            await this.randomDelay(500, 1000);
-        } catch (e) {
-            // Interaction failed, possibly due to page closing or navigation
-        }
+            await page.mouse.move(CONFIG.MOUSE_START_X + Math.random() * 10, CONFIG.MOUSE_START_Y + Math.random() * 10);
+            await page.mouse.wheel(0, CONFIG.WHEEL_SCROLL_Y);
+            await this.randomDelay(CONFIG.HUMAN_DELAY_MIN, CONFIG.HUMAN_DELAY_MAX);
+        } catch {}
     }
 
     /**
-     * Introduces a random delay between a range.
-     *
-     * @param min - Minimum delay in ms.
-     * @param max - Maximum delay in ms.
-     * @returns A promise that resolves after the delay.
+     * Creates a promise that resolves after a random delay within the specified range.
+     * @param min - Minimum delay in milliseconds.
+     * @param max - Maximum delay in milliseconds.
      */
     private async randomDelay(min: number, max: number): Promise<void> {
         return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1) + min)));
     }
 
     /**
-     * Logs errors to the file stream.
-     *
-     * @param type - Source type.
-     * @param sku - Product SKU.
-     * @param error - The error encountered.
+     * Logs error details to the persistent error stream.
+     * @param type - The retailer type (e.g., Amazon, Walmart).
+     * @param sku - The SKU that caused the error.
+     * @param error - The error object or unknown value caught.
      */
     private logError(type: string, sku: string, error: unknown): void {
         const msg = error instanceof Error ? error.message : 'Unknown error';
