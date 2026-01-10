@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "scrapper": "tsx src/scraper.ts"
+    "scrapper": "tsx src/scrapper.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
