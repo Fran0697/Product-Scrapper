@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import {ProductScraper, csvWriterInstance} from "./utils.ts";
+import * as readline from "node:readline";
 
 const errorLog = fs.createWriteStream('errors.log', {flags: 'a'});
 
@@ -24,6 +25,18 @@ const runScraper = async () => {
         console.error("Critical Error:", message);
     } finally {
         await scraper.close();
+
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+
+        await new Promise(resolve => {
+            rl.question('\nPress Enter to close the program...', () => {
+                rl.close();
+                resolve(null);
+            });
+        });
     }
 };
 
