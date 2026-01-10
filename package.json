@@ -3,13 +3,15 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "scraper": "tsx src/scraper.ts"
+    "scraper": "tsx src/scraper.ts",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/jest": "^30.0.0",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
     "tsx": "^4.21.0"
   },
   "peerDependencies": {

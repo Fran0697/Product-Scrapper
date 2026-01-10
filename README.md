@@ -2,17 +2,16 @@
 
 ## Overview
 
-Welcome to the **Product Scraper** project! This tool is designed to scrape product data from various retailers and save
-it into a CSV file. It leverages modern TypeScript and powerful libraries like **Playwright** (for browser automation)
-and **Puppeteer Extra Stealth** (to evade detection) to handle web scraping tasks efficiently.
+Welcome to the **Product Scraper** project! This tool is designed to scrape product data from various retailers and save it into a CSV file. It leverages modern TypeScript and powerful libraries like **Playwright** (for browser automation) and **Puppeteer Extra Stealth** (to evade detection) to handle web scraping tasks efficiently.
 
 ## Key Features
 
 - **Multi-Retailer Support**: Extracts Title, Description, Price, and Number of Reviews from **Amazon** and **Walmart**.
 - **CSV Output**: Automatically organizes and saves the scraped data into a `product_data.csv` file.
 - **Stealth Mode**: Integrated with `puppeteer-extra-plugin-stealth` to reduce the likelihood of bot detection.
-- **Concurrency Control**: Limits the number of concurrent browser instances (workers) to optimize performance and
-  prevent overloading target servers.
+- **Concurrency Control**: Limits the number of concurrent browser instances (workers) to optimize performance and prevent overloading target servers (Configurable via `utils.ts`).
+- **Smart Retry Mechanism**: Automatically retries failed requests (up to 3 times) to handle network instability or temporary blocks.
+- **Unit Testing Suite**: Includes Jest-based unit tests to verify scraping logic without requiring a browser instance.
 
 ## Assumptions
 
@@ -45,7 +44,7 @@ While this tool is robust, please be aware of the following technical and functi
 ### Prerequisites
 
 1. **Bun**: This project uses Bun as the package manager. Download it from [bun.sh](https://bun.sh/).
-2. **Node.js**: Required for the execution runtime due to Playwright compatibility. Download it
+2. **Node.js**: Required for the execution runtime due to Playwright and Jest compatibility. Download it
    from [nodejs.org](https://nodejs.org/en/download).
 
 ### Installation Steps
@@ -96,6 +95,14 @@ bun run scraper
 
 This command will start the scraping process and save the results to `product_data.csv`.
 
+### Running the test suite
+
+To execute the test suite, run the following command in your terminal:
+
+```shell script
+bun run test
+```
+
 ## Project Structure
 
 Here's a brief overview of the project structure:
@@ -103,10 +110,13 @@ Here's a brief overview of the project structure:
 - **src/**: Contains the source code.
     - **scraper.ts**: The main script that runs the scraping process.
     - **utils.ts**: Utility functions and configurations for the scraper.
+    - **scraper.test.ts**: Unit tests for the scraper logic using Jest and mocks.
 
 - **bun.lock**: Lock file for dependency versions managed by Bun.
 
 - **product_data.csv**: Output CSV file containing scraped product data.
+
+- **errors.log**: Log file for tracking runtime errors.
 
 - **skus.json**: Input JSON file with SKUs to be scraped.
 
