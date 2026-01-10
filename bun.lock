@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "product-scrapper",
+      "name": "product-scraper",
       "dependencies": {
         "csv-writer": "1.6.0",
         "playwright": "1.57.0",

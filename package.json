@@ -1,9 +1,9 @@
 {
-  "name": "product-scrapper",
+  "name": "product-scraper",
   "type": "module",
   "private": true,
   "scripts": {
-    "scrapper": "tsx src/scrapper.ts"
+    "scraper": "tsx src/scraper.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
