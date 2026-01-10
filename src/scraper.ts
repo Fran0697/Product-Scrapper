@@ -37,7 +37,7 @@ const runScraper = async () => {
     });
 
     await new Promise(resolve => {
-        rl.question('\nPresiona ENTER para cerrar este programa...', () => {
+        rl.question('\nPress Enter to close this program...', () => {
             rl.close();
             resolve(null);
         });
