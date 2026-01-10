@@ -14,6 +14,7 @@ export const CONFIG = {
     LOCATOR_TIMEOUT: 10000,
     PAGE_TIMEOUT: 30000,
     CONCURRENCY_LIMIT: 3,
+    MAX_RETRIES: 3,
     VIEWPORT: {width: 1920, height: 1080},
     CAPTCHA_WAIT_STABILIZE: 10000,
     CAPTCHA_HOLD_MIN: 10000,
@@ -55,6 +56,7 @@ export interface Product {
     Description: string;
     Price: string;
     'Number of Reviews': string;
+    Rating: string;
 }
 
 /**
@@ -73,6 +75,7 @@ type SelectorConfig = {
     description: string[];
     price: string[];
     reviews: string[];
+    rating: string[];
 };
 
 /**
@@ -83,13 +86,15 @@ const SELECTORS_MAP: Record<string, SelectorConfig> = {
         title: ['#productTitle', '#title', '.qa-title-text'],
         description: ['#productDescription', '#feature-bullets'],
         price: ['.a-price .a-offscreen', '#corePriceDisplay_desktop_feature_div span', '.a-color-price'],
-        reviews: ['#acrCustomerReviewText', '#acrCustomerReviewLink']
+        reviews: ['#acrCustomerReviewText', '#acrCustomerReviewLink'],
+        rating: ['i.a-icon-star span', 'span[data-hook="rating-out-of-text"]', '.a-icon-alt']
     },
     Walmart: {
         title: ['h1', '[itemprop="name"]'],
         description: ['meta[name="description"]'],
         price: ['[itemprop="price"]', '.price-display .display-price', '[data-testid="price-wrap"]'],
-        reviews: ['script[data-seo-id="schema-org-product"]', '.rating-number', '[data-testid="reviews-count"]', '.w_D']
+        reviews: ['script[data-seo-id="schema-org-product"]', '.rating-number', '[data-testid="reviews-count"]', '.w_D'],
+        rating: ['script[data-seo-id="schema-org-product"]', '[data-testid="average-rating"]', '.rating-number']
     }
 };
 
@@ -104,7 +109,8 @@ export const csvWriterInstance = createObjectCsvWriter({
         {id: 'Title', title: 'Title'},
         {id: 'Description', title: 'Description'},
         {id: 'Price', title: 'Price'},
-        {id: 'Number of Reviews', title: 'Number of Reviews'}
+        {id: 'Number of Reviews', title: 'Number of Reviews'},
+        {id: 'Rating', title: 'Rating'}
     ]
 });
 
@@ -175,7 +181,7 @@ export class ProductScraper {
             while (queue.length > 0 && activeWorkers.length < CONFIG.CONCURRENCY_LIMIT) {
                 const sku = queue.shift();
                 if (sku) {
-                    const worker = this.scrapeSingleSKU(sku).then(product => {
+                    const worker = this.scrapeWithRetry(sku).then(product => {
                         results.push(product);
                     });
 
@@ -193,6 +199,39 @@ export class ProductScraper {
         }
 
         return results;
+    }
+
+    /**
+     * Wraps the single SKU scraping logic with a retry mechanism.
+     * Attempts to scrape the product up to CONFIG.MAX_RETRIES times.
+     * @param sku - The SKU input data.
+     * @returns A promise resolving to the scraped Product or a fallback error object after retries exhausted.
+     */
+    private async scrapeWithRetry(sku: SKUInput): Promise<Product> {
+        let attempt = 0;
+
+        while (attempt < CONFIG.MAX_RETRIES) {
+            attempt++;
+            try {
+                const product = await this.scrapeSingleSKU(sku);
+
+                if (product.Title === 'ERROR' || product.Title.includes('Robot Check')) {
+                    throw new Error('Soft detection or content load failure');
+                }
+
+                return product;
+            } catch (error) {
+                const msg = error instanceof Error ? error.message : 'Unknown';
+                console.warn(`${new Date().toISOString()}: Warning - Attempt ${attempt}/${CONFIG.MAX_RETRIES} failed for ${sku.SKU}: ${msg}`);
+
+                if (attempt < CONFIG.MAX_RETRIES) {
+                    await this.randomDelay(2000, 5000);
+                }
+            }
+        }
+
+        this.logError(sku.Type, sku.SKU, new Error(`Failed after ${CONFIG.MAX_RETRIES} attempts`));
+        return this.createFallbackProduct(sku, `FAILED after ${CONFIG.MAX_RETRIES} attempts`);
     }
 
     /**
@@ -216,9 +255,8 @@ export class ProductScraper {
             product = await this.fetchProductData(page, sku);
 
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown Error';
-            this.logError(sku.Type, sku.SKU, error);
-            product = this.createFallbackProduct(sku, `ERROR: ${errorMessage}`);
+            product = this.createFallbackProduct(sku, "Temporary Failure");
+            throw error;
         } finally {
             try {
                 if (page) await page.close();
@@ -445,13 +483,15 @@ export class ProductScraper {
      * Applies Regex cleaning to Price and Reviews to ensure numerical format.
      * @param page - The Playwright Page object.
      * @param selectors - The selector configuration.
-     * @returns An object containing cleaned strings for Title, Description, Price, and Reviews.
+     * @returns An object containing cleaned strings for Title, Description, Price, Reviews, and Rating.
      */
     private async extractData(page: Page, selectors: SelectorConfig) {
-        const getTextFromSelectors = async (selectorList: string[]) => {
+
+        const getTextFromSelectors = async (selectorList: string[], dataType?: 'reviews' | 'rating') => {
             for (const sel of selectorList) {
                 try {
                     const el = page.locator(sel).first();
+
                     if (sel.startsWith('script')) {
                         const scriptContent = await el.textContent();
                         if (scriptContent) {
@@ -459,39 +499,45 @@ export class ProductScraper {
                                 const json = JSON.parse(scriptContent);
                                 const data = Array.isArray(json) ? json[0] : json;
 
-                                if (data?.aggregateRating?.reviewCount) {
+                                if (dataType === 'rating' && data?.aggregateRating?.ratingValue) {
+                                    return data.aggregateRating.ratingValue.toString();
+                                }
+                                if (dataType === 'reviews' && data?.aggregateRating?.reviewCount) {
                                     return data.aggregateRating.reviewCount.toString();
                                 }
                             } catch (e) {
                             }
                         }
                     }
+
                     if (sel.startsWith('meta')) {
                         const content = await el.getAttribute('content');
                         if (content) return content;
                     }
+
                     if (await el.isVisible()) {
                         return await el.innerText({timeout: CONFIG.EXTRACT_TEXT_TIMEOUT});
                     }
                 } catch {
                 }
-
             }
             return CONFIG.EMPTY_STRING;
         };
 
-        const [title, description, price, reviews] = await Promise.all([
+        const [title, description, price, reviews, rating] = await Promise.all([
             getTextFromSelectors(selectors.title),
             getTextFromSelectors(selectors.description),
             getTextFromSelectors(selectors.price),
-            getTextFromSelectors(selectors.reviews)
+            getTextFromSelectors(selectors.reviews, 'reviews'),
+            getTextFromSelectors(selectors.rating, 'rating')
         ]);
 
         return {
-            Title: title.trim(),
+            Title: title.trim() || "ERROR",
             Description: description.slice(0, CONFIG.DESCRIPTION_MAX_LENGTH).replace(/\s+/g, ' ').trim(),
             Price: price.replace(/[^0-9.]/g, ''),
-            'Number of Reviews': reviews.replace(/\D/g, '')
+            'Number of Reviews': reviews.replace(/\D/g, ''),
+            Rating: rating.split('out of')[0].trim().replace(/[^\d.]/g, '')
         };
     }
 
@@ -508,7 +554,8 @@ export class ProductScraper {
             Title: reason,
             Description: CONFIG.FALLBACK_DESCRIPTION,
             Price: CONFIG.EMPTY_STRING,
-            'Number of Reviews': CONFIG.EMPTY_STRING
+            'Number of Reviews': CONFIG.EMPTY_STRING,
+            Rating: CONFIG.EMPTY_STRING
         };
     }
 
@@ -546,14 +593,5 @@ export class ProductScraper {
         if (this.errorStream.writable) {
             this.errorStream.write(logLine);
         }
-    }
-
-    /**
-     * Helper function to extract and format numerical values from a string.
-     * @param value - The original string containing the price or review count.
-     * @returns A formatted string with only the numerical part.
-     */
-    private formatNumber(value: string): string {
-        return value.replace(/[^\d.]/g, '');
     }
 }
