@@ -107,6 +107,20 @@ bun run test
 
 ![result.png](result.png)
 
+## Running the Standalone Executable (.exe)
+
+If you are using the compiled executable (`scraper-app.exe`) instead of running the source code, you must ensure the file structure is correct. The executable relies on external files to read inputs and write outputs.
+
+Ensure your folder looks exactly like this before running:
+
+```text
+/MyScraperFolder
+  ├── scraper-app.exe      # The compiled application
+  ├── skus.json            # REQUIRED: The input file containing SKUs to scrape
+  ├── product_data.csv     # (Output) Created automatically after running
+  └── errors.log           # (Output) Created automatically if errors occur
+```
+
 ## Project Structure
 
 Here's a brief overview of the project structure:
