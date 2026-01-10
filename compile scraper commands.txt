@@ -1,2 +1,0 @@
-bun x tsup src/scraper.ts --format cjs --out-dir dist
-bun x pkg . --targets node18-win-x64 --output scraper-app.exe

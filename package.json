@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "scraper": "tsx src/scraper.ts",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "build": "tsup src/scraper.ts --format cjs --out-dir dist && pkg . --targets node18-win-x64 --output scraper-app.exe"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -28,7 +29,9 @@
   },
   "pkg": {
     "assets": [
-      "node_modules/puppeteer-extra-plugin-stealth/**/*"
-    ]
+      "node_modules/puppeteer-extra-plugin-stealth/**/*",
+      "dist/**/*"
+    ],
+    "outputPath": "dist"
   }
 }
