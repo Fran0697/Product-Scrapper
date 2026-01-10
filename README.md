@@ -103,6 +103,10 @@ To execute the test suite, run the following command in your terminal:
 bun run test
 ```
 
+![img.png](img.png)
+
+![result.png](result.png)
+
 ## Project Structure
 
 Here's a brief overview of the project structure:
