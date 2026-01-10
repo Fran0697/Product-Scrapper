@@ -107,19 +107,18 @@ bun run test
 
 ![result.png](result.png)
 
-## Running the Standalone Executable (.exe)
+## 🚀 Quick Start (Standalone Executable)
 
-If you are using the compiled executable (`scraper-app.exe`) instead of running the source code, you must ensure the file structure is correct. The executable relies on external files to read inputs and write outputs.
+If you prefer not to install Node.js or build from source, you can run the pre-compiled application directly:
 
-Ensure your folder looks exactly like this before running:
-
-```text
-/MyScraperFolder
-  ├── scraper-app.exe      # The compiled application
-  ├── skus.json            # REQUIRED: The input file containing SKUs to scrape
-  ├── product_data.csv     # (Output) Created automatically after running
-  └── errors.log           # (Output) Created automatically if errors occur
-```
+1.  **Download:** Go to the **[Releases](../../releases)** page of this repository and download the latest `.zip` file (e.g., `v1.0.0`).
+2.  **Unzip:** Extract the contents into a folder on your computer. You should see `scraper-app.exe` and `skus.json`.
+3.  **Modify SKUs:** Open the `skus.json` file with any text editor (like Notepad) and update the list with the Amazon or Walmart SKUs you want to scrape.
+4.  **Run:** Double-click `scraper-app.exe`.
+5.  **View Results:**
+  * The program will open a console window and show progress.
+  * Once finished, check the `product_data.csv` file generated in the same folder for your data.
+  * Press `ENTER` to close the program.
 
 ## Project Structure
 
