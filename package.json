@@ -1,18 +1,21 @@
 {
   "name": "product-scrapper",
-  "module": "scraper.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "scrapper": "tsx src/scraper.ts"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "tsx": "^4.21.0"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "csv-writer": "1.6.0",
-    "playwright": "^1.57.0",
-    "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "playwright": "1.57.0",
+    "playwright-extra": "4.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2"
   }
 }

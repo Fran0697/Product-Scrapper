@@ -17,7 +17,7 @@ export const CONFIG = {
     VIEWPORT: {width: 1920, height: 1080},
     CAPTCHA_WAIT_STABILIZE: 10000,
     CAPTCHA_HOLD_MIN: 10000,
-    CAPTCHA_HOLD_RANDOM: 3000,
+    CAPTCHA_HOLD_RANDOM: 30000,
     BATCH_DELAY_MIN: 1000,
     BATCH_DELAY_MAX: 3000,
     HUMAN_DELAY_MIN: 1000,
@@ -87,9 +87,9 @@ const SELECTORS_MAP: Record<string, SelectorConfig> = {
     },
     Walmart: {
         title: ['h1', '[itemprop="name"]'],
-        description: ['.product-description', '[data-testid="product-description"]', '.w_A'],
+        description: ['meta[name="description"]'],
         price: ['[itemprop="price"]', '.price-display .display-price', '[data-testid="price-wrap"]'],
-        reviews: ['.rating-number', '[data-testid="reviews-count"]', '.w_D']
+        reviews: ['script[data-seo-id="schema-org-product"]', '.rating-number', '[data-testid="reviews-count"]', '.w_D']
     }
 };
 
@@ -133,7 +133,6 @@ export class ProductScraper {
             headless: true,
             channel: 'chrome',
             args: [
-                '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-webrtc',
@@ -161,7 +160,7 @@ export class ProductScraper {
 
     /**
      * Processes a list of SKUs in batches based on the configured concurrency limit.
-     * * @param skus - An array of SKUInput objects containing the SKU and retailer type.
+     * @param skus - An array of SKUInput objects containing the SKU and retailer type.
      * @returns A promise that resolves to an array of scraped Product objects.
      */
     async processSKUs(skus: SKUInput[]): Promise<Product[]> {
@@ -199,7 +198,7 @@ export class ProductScraper {
     /**
      * Orchestrates the scraping process for a single SKU.
      * Handles context creation, data fetching, error handling, and cleanup.
-     * * @param sku - The SKU input data.
+     * @param sku - The SKU input data.
      * @returns A promise resolving to the scraped Product or a fallback error object.
      */
     private async scrapeSingleSKU(sku: SKUInput): Promise<Product> {
@@ -224,7 +223,8 @@ export class ProductScraper {
             try {
                 if (page) await page.close();
                 if (context) await context.close();
-            } catch (e) {}
+            } catch (e) {
+            }
             console.log(`${new Date().toISOString()}: Finished task for ${sku.Type} product with SKU ${sku.SKU}`);
         }
 
@@ -233,8 +233,9 @@ export class ProductScraper {
 
     /**
      * Creates a new browser context with randomized user agent and specific locale settings.
+     * Forces US geolocation (NY) and timezone to ensure correct currency and availability.
      * Blocks requests for media and font resources to improve performance.
-     * * @returns A configured BrowserContext.
+     * @returns A configured BrowserContext.
      */
     private async createBrowserContext(): Promise<BrowserContext> {
         if (!this.browser) throw new Error("Browser not ready");
@@ -245,6 +246,8 @@ export class ProductScraper {
             userAgent: userAgent,
             viewport: CONFIG.VIEWPORT,
             locale: CONFIG.LOCALE,
+            timezoneId: 'America/New_York',
+            geolocation: {latitude: 40.7128, longitude: -74.0060},
             deviceScaleFactor: 1,
             hasTouch: false,
             isMobile: false,
@@ -291,7 +294,7 @@ export class ProductScraper {
 
     /**
      * Constructs the full product URL based on the retailer type and SKU.
-     * * @param sku - The SKU input data.
+     * @param sku - The SKU input data.
      * @returns The full URL string.
      */
     private resolveProductUrl(sku: SKUInput): string {
@@ -336,7 +339,8 @@ export class ProductScraper {
                 await page.waitForLoadState('domcontentloaded');
                 await this.randomDelay(CONFIG.AMAZON_POST_CLICK_DELAY_MIN, CONFIG.AMAZON_POST_CLICK_DELAY_MAX);
             }
-        } catch (e) {}
+        } catch (e) {
+        }
     }
 
     /**
@@ -374,7 +378,7 @@ export class ProductScraper {
     }
 
     /**
-     * Simulates a "Press & Hold" interaction to solve Walmart CAPTCHAs.
+     * Simulates a "Press & Hold" interaction to solve Walmart CAPTCHA.
      * @param page - The Playwright Page object.
      * @param captchaBtn - The locator for the CAPTCHA button.
      */
@@ -390,7 +394,8 @@ export class ProductScraper {
         await page.waitForTimeout(holdDuration);
         await page.mouse.up();
 
-        await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await page.waitForLoadState('domcontentloaded').catch(() => {
+        });
         await this.randomDelay(CONFIG.WALMART_POST_CAPTCHA_DELAY_MIN, CONFIG.WALMART_POST_CAPTCHA_DELAY_MAX);
     }
 
@@ -435,21 +440,42 @@ export class ProductScraper {
     }
 
     /**
-     * Extracts text content from the page using the provided selector configuration.
-     * iterates through potential selectors for each field until a match is found.
+     * Extracts text content or attribute data from the page using the provided selector configuration.
+     * Handles standard elements, Meta tags, and JSON-LD scripts for structured data.
+     * Applies Regex cleaning to Price and Reviews to ensure numerical format.
      * @param page - The Playwright Page object.
      * @param selectors - The selector configuration.
-     * @returns An object containing raw extracted strings for Title, Description, Price, and Reviews.
+     * @returns An object containing cleaned strings for Title, Description, Price, and Reviews.
      */
     private async extractData(page: Page, selectors: SelectorConfig) {
         const getTextFromSelectors = async (selectorList: string[]) => {
             for (const sel of selectorList) {
                 try {
                     const el = page.locator(sel).first();
+                    if (sel.startsWith('script')) {
+                        const scriptContent = await el.textContent();
+                        if (scriptContent) {
+                            try {
+                                const json = JSON.parse(scriptContent);
+                                const data = Array.isArray(json) ? json[0] : json;
+
+                                if (data?.aggregateRating?.reviewCount) {
+                                    return data.aggregateRating.reviewCount.toString();
+                                }
+                            } catch (e) {
+                            }
+                        }
+                    }
+                    if (sel.startsWith('meta')) {
+                        const content = await el.getAttribute('content');
+                        if (content) return content;
+                    }
                     if (await el.isVisible()) {
                         return await el.innerText({timeout: CONFIG.EXTRACT_TEXT_TIMEOUT});
                     }
-                } catch {}
+                } catch {
+                }
+
             }
             return CONFIG.EMPTY_STRING;
         };
@@ -464,8 +490,8 @@ export class ProductScraper {
         return {
             Title: title.trim(),
             Description: description.slice(0, CONFIG.DESCRIPTION_MAX_LENGTH).replace(/\s+/g, ' ').trim(),
-            Price: price.replace(/\n/g, '').trim(),
-            'Number of Reviews': reviews.trim()
+            Price: price.replace(/[^0-9.]/g, ''),
+            'Number of Reviews': reviews.replace(/\D/g, '')
         };
     }
 
@@ -495,7 +521,8 @@ export class ProductScraper {
             await page.mouse.move(CONFIG.MOUSE_START_X + Math.random() * 10, CONFIG.MOUSE_START_Y + Math.random() * 10);
             await page.mouse.wheel(0, CONFIG.WHEEL_SCROLL_Y);
             await this.randomDelay(CONFIG.HUMAN_DELAY_MIN, CONFIG.HUMAN_DELAY_MAX);
-        } catch {}
+        } catch {
+        }
     }
 
     /**
@@ -519,5 +546,14 @@ export class ProductScraper {
         if (this.errorStream.writable) {
             this.errorStream.write(logLine);
         }
+    }
+
+    /**
+     * Helper function to extract and format numerical values from a string.
+     * @param value - The original string containing the price or review count.
+     * @returns A formatted string with only the numerical part.
+     */
+    private formatNumber(value: string): string {
+        return value.replace(/[^\d.]/g, '');
     }
 }
